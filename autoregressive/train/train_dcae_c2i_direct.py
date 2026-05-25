@@ -139,15 +139,28 @@ def main(args):
         f"Code dir {code_dir} or label dir {label_dir} does not exist. Please run extract_codes_dcae_direct.py first."
 
     dataset = DCAEDirectCodeDataset(code_dir, label_dir)
+
+    if args.eval_every > 0:
+        val_split = int(len(dataset) * 0.01)
+        train_split = len(dataset) - val_split
+        train_dataset, val_dataset = torch.utils.data.random_split(
+            dataset, [train_split, val_split],
+            generator=torch.Generator().manual_seed(args.global_seed)
+        )
+        logger.info(f"Train/Val split: {train_split}/{val_split}")
+    else:
+        train_dataset = dataset
+        val_dataset = None
+
     sampler = DistributedSampler(
-        dataset,
+        train_dataset,
         num_replicas=dist.get_world_size(),
         rank=rank,
         shuffle=True,
         seed=args.global_seed
     )
     loader = DataLoader(
-        dataset,
+        train_dataset,
         batch_size=int(args.global_batch_size // dist.get_world_size()),
         shuffle=False,
         sampler=sampler,
@@ -155,7 +168,26 @@ def main(args):
         pin_memory=True,
         drop_last=True
     )
-    logger.info(f"Dataset contains {len(dataset):,} images ({args.code_path})")
+    logger.info(f"Dataset contains {len(train_dataset):,} images ({args.code_path})")
+
+    val_loader = None
+    if val_dataset is not None and args.eval_every > 0:
+        val_sampler = DistributedSampler(
+            val_dataset,
+            num_replicas=dist.get_world_size(),
+            rank=rank,
+            shuffle=False,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=int(args.global_batch_size // dist.get_world_size()),
+            shuffle=False,
+            sampler=val_sampler,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            drop_last=True
+        )
+        logger.info(f"Validation dataset contains {len(val_dataset):,} images")
 
     if args.gpt_ckpt:
         checkpoint = torch.load(args.gpt_ckpt, map_location="cpu")
@@ -251,6 +283,41 @@ def main(args):
                     logger.info(f"Saved checkpoint in cloud to {cloud_checkpoint_path}")
                 dist.barrier()
 
+        if val_loader is not None and (epoch + 1) % args.eval_every == 0:
+            eval_model = ema if args.ema else (model.module._orig_mod if not args.no_compile else model.module)
+            eval_model.eval()
+            val_loss = 0.0
+            val_steps = 0
+            sign_acc = 0.0
+            total_elements = 0
+            with torch.no_grad():
+                for x, y in val_loader:
+                    x = x.to(device, non_blocking=True)
+                    y = y.to(device, non_blocking=True)
+                    z_codes = x.reshape(x.shape[0], -1, args.codebook_dim)
+                    c_indices = y.reshape(-1)
+                    with torch.cuda.amp.autocast(dtype=ptdtype):
+                        output, loss = eval_model(cond_idx=c_indices, idx=z_codes[:, :-1, :], targets=z_codes)
+                    val_loss += loss.item()
+                    val_steps += 1
+                    pred_sign = torch.sign(output)
+                    target_sign = z_codes[:, 1:, :]
+                    sign_acc += (pred_sign == target_sign).float().sum().item()
+                    total_elements += target_sign.numel()
+
+            val_loss_avg = torch.tensor(val_loss / max(val_steps, 1), device=device)
+            dist.all_reduce(val_loss_avg, op=dist.ReduceOp.SUM)
+            val_loss_avg = val_loss_avg.item() / dist.get_world_size()
+
+            sign_acc_total = torch.tensor(sign_acc, device=device)
+            total_elements_total = torch.tensor(total_elements, device=device)
+            dist.all_reduce(sign_acc_total, op=dist.ReduceOp.SUM)
+            dist.all_reduce(total_elements_total, op=dist.ReduceOp.SUM)
+            sign_acc_pct = sign_acc_total.item() / max(total_elements_total.item(), 1) * 100
+
+            logger.info(f"(epoch={epoch:04d}) Val Loss: {val_loss_avg:.4f}, Sign Accuracy: {sign_acc_pct:.2f}%")
+            eval_model.train()
+
     model.eval()
     logger.info("Done!")
     dist.destroy_process_group()
@@ -288,6 +355,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-workers", type=int, default=24)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--ckpt-every", type=int, default=5000)
+    parser.add_argument("--eval-every", type=int, default=10, help="evaluate every N epochs (0 to disable)")
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--mixed-precision", type=str, default='bf16', choices=["none", "fp16", "bf16"])
     args = parser.parse_args()
