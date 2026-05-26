@@ -14,7 +14,6 @@ import sys
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, project_root)
 
-from tokenizer.tokenizer_image.bsqdc_evit_model import VQModel
 from tokenizer.tokenizer_image.bsqdc_model import ModelArgs
 from autoregressive.models.gpt_continuous import ContinuousTransformer, ContinuousModelArgs, GPT_continuous_models
 
@@ -30,60 +29,90 @@ def build_dcae_decoder_from_ckpt(ckpt_path, device):
     ckpt_args = checkpoint.get("args", None)
     model_name = getattr(ckpt_args, "vq_model", None) if ckpt_args else None
 
-    if model_name == "DCAE-16":
-        encoder_widths = [128, 256, 512, 512, 1024]
-        decoder_widths = [128, 256, 512, 512, 1024]
-        encoder_depth_list = [0, 4, 8, 2, 2]
-        decoder_depth_list = [0, 5, 10, 2, 2]
-        encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU"]
-        decoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU"]
-        decoder_norm = ["bn2d", "bn2d", "bn2d", "trms2d", "trms2d"]
-        decoder_act = ["relu", "relu", "relu", "silu", "silu"]
-    elif model_name == "DCAE-64":
-        encoder_widths = [128, 256, 512, 512, 1024, 1024, 2048]
-        decoder_widths = [128, 256, 512, 512, 1024, 1024, 2048]
-        encoder_depth_list = [0, 4, 8, 2, 2, 2, 2]
-        decoder_depth_list = [0, 5, 10, 2, 2, 2, 2]
-        encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
-        decoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
-        decoder_norm = ["bn2d", "bn2d", "bn2d", "trms2d", "trms2d", "trms2d", "trms2d"]
-        decoder_act = ["relu", "relu", "relu", "silu", "silu", "silu", "silu"]
-    else:
-        encoder_widths = [128, 256, 512, 512, 1024, 1024]
-        decoder_widths = [128, 256, 512, 512, 1024, 1024]
-        encoder_depth_list = [0, 4, 8, 2, 2, 2]
-        decoder_depth_list = [0, 5, 10, 2, 2, 2]
-        encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
-        decoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
-        decoder_norm = ["bn2d", "bn2d", "bn2d", "trms2d", "trms2d", "trms2d"]
-        decoder_act = ["relu", "relu", "relu", "silu", "silu", "silu"]
-
     sample = getattr(ckpt_args, "sample", True) if ckpt_args else True
     codebook_l2_norm = getattr(ckpt_args, "codebook_l2_norm", True) if ckpt_args else True
     learnable_proj = getattr(ckpt_args, "learnable_proj", True) if ckpt_args else True
     anneal_noise = getattr(ckpt_args, "anneal_noise", False) if ckpt_args else False
     dropout_p = getattr(ckpt_args, "dropout_p", 0.0) if ckpt_args else 0.0
 
-    config = ModelArgs(
-        num_bits=num_bits,
-        codebook_embed_dim=codebook_embed_dim,
-        codebook_l2_norm=codebook_l2_norm,
-        z_channels=z_channels,
-        encoder_ch_mult=encoder_widths,
-        decoder_ch_mult=decoder_widths,
-        sample=sample,
-        learnable_proj=learnable_proj,
-        anneal_noise=anneal_noise,
-        dropout_p=dropout_p,
-    )
-    config.encoder_depth_list = encoder_depth_list
-    config.decoder_depth_list = decoder_depth_list
-    config.encoder_block_type = encoder_block_type
-    config.decoder_block_type = decoder_block_type
-    config.decoder_norm = decoder_norm
-    config.decoder_act = decoder_act
+    use_evit = any(k.startswith("encoder.stages") or k.startswith("encoder.project_in") for k in state_dict.keys())
 
-    model = VQModel(config)
+    if use_evit:
+        from tokenizer.tokenizer_image.bsqdc_evit_model import VQModel as EvitVQModel
+
+        if model_name == "DCAE-16":
+            encoder_ch_mult = [128, 256, 512, 512, 1024]
+            decoder_ch_mult = [128, 256, 512, 512, 1024]
+            encoder_depth_list = [0, 4, 8, 2, 2]
+            decoder_depth_list = [0, 5, 10, 2, 2]
+            encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU"]
+            decoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU"]
+            decoder_norm = ["bn2d", "bn2d", "bn2d", "trms2d", "trms2d"]
+            decoder_act = ["relu", "relu", "relu", "silu", "silu"]
+        elif model_name == "DCAE-64":
+            encoder_ch_mult = [128, 256, 512, 512, 1024, 1024, 2048]
+            decoder_ch_mult = [128, 256, 512, 512, 1024, 1024, 2048]
+            encoder_depth_list = [0, 4, 8, 2, 2, 2, 2]
+            decoder_depth_list = [0, 5, 10, 2, 2, 2, 2]
+            encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
+            decoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
+            decoder_norm = ["bn2d", "bn2d", "bn2d", "trms2d", "trms2d", "trms2d", "trms2d"]
+            decoder_act = ["relu", "relu", "relu", "silu", "silu", "silu", "silu"]
+        else:
+            encoder_ch_mult = [128, 256, 512, 512, 1024, 1024]
+            decoder_ch_mult = [128, 256, 512, 512, 1024, 1024]
+            encoder_depth_list = [0, 4, 8, 2, 2, 2]
+            decoder_depth_list = [0, 5, 10, 2, 2, 2]
+            encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
+            decoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
+            decoder_norm = ["bn2d", "bn2d", "bn2d", "trms2d", "trms2d", "trms2d"]
+            decoder_act = ["relu", "relu", "relu", "silu", "silu", "silu"]
+
+        config = ModelArgs(
+            num_bits=num_bits,
+            codebook_embed_dim=codebook_embed_dim,
+            codebook_l2_norm=codebook_l2_norm,
+            z_channels=z_channels,
+            encoder_ch_mult=encoder_ch_mult,
+            decoder_ch_mult=decoder_ch_mult,
+            sample=sample,
+            learnable_proj=learnable_proj,
+            anneal_noise=anneal_noise,
+            dropout_p=dropout_p,
+        )
+        config.encoder_depth_list = encoder_depth_list
+        config.decoder_depth_list = decoder_depth_list
+        config.encoder_block_type = encoder_block_type
+        config.decoder_block_type = decoder_block_type
+        config.decoder_norm = decoder_norm
+        config.decoder_act = decoder_act
+
+        model = EvitVQModel(config)
+        downsample_factor = 2 ** (len(encoder_ch_mult) - 1)
+    else:
+        from tokenizer.tokenizer_image.bsqdc_model import VQModel as BaseVQModel
+
+        encoder_ch_mult = getattr(ckpt_args, "encoder_ch_mult", [1, 1, 2, 2, 4, 4]) if ckpt_args else [1, 1, 2, 2, 4, 4]
+        decoder_ch_mult = getattr(ckpt_args, "decoder_ch_mult", [1, 1, 2, 2, 4, 4]) if ckpt_args else [1, 1, 2, 2, 4, 4]
+        num_res_blocks = getattr(ckpt_args, "num_res_blocks", 2) if ckpt_args else 2
+
+        config = ModelArgs(
+            num_bits=num_bits,
+            codebook_embed_dim=codebook_embed_dim,
+            codebook_l2_norm=codebook_l2_norm,
+            z_channels=z_channels,
+            encoder_ch_mult=encoder_ch_mult,
+            decoder_ch_mult=decoder_ch_mult,
+            sample=sample,
+            learnable_proj=learnable_proj,
+            anneal_noise=anneal_noise,
+            dropout_p=dropout_p,
+            num_res_blocks=num_res_blocks,
+        )
+
+        model = BaseVQModel(config)
+        downsample_factor = 2 ** (len(encoder_ch_mult) - 1)
+
     use_ema = "ema" in checkpoint
     if use_ema:
         model.load_state_dict(checkpoint["ema"])
@@ -93,7 +122,6 @@ def build_dcae_decoder_from_ckpt(ckpt_path, device):
     model.to(device)
     model.eval()
 
-    downsample_factor = 2 ** (len(encoder_widths) - 1)
     return model, downsample_factor, num_bits
 
 
