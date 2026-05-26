@@ -191,12 +191,30 @@ def build_dcae_model_from_ckpt(ckpt_path, device):
     if model_name == "DCAE-16":
         encoder_ch_mult = [1, 1, 2, 2, 4]
         decoder_ch_mult = [1, 1, 2, 2, 4]
+        encoder_depth_list = [0, 4, 8, 2, 2]
+        decoder_depth_list = [0, 5, 10, 2, 2]
+        encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU"]
+        decoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU"]
+        decoder_norm = ["bn2d", "bn2d", "bn2d", "trms2d", "trms2d"]
+        decoder_act = ["relu", "relu", "relu", "silu", "silu"]
     elif model_name == "DCAE-64":
         encoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
         decoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
+        encoder_depth_list = [0, 4, 8, 2, 2, 2, 2]
+        decoder_depth_list = [0, 5, 10, 2, 2, 2, 2]
+        encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
+        decoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
+        decoder_norm = ["bn2d", "bn2d", "bn2d", "trms2d", "trms2d", "trms2d", "trms2d"]
+        decoder_act = ["relu", "relu", "relu", "silu", "silu", "silu", "silu"]
     else:
         encoder_ch_mult = [1, 1, 2, 2, 4, 4]
         decoder_ch_mult = [1, 1, 2, 2, 4, 4]
+        encoder_depth_list = [0, 4, 8, 2, 2, 2]
+        decoder_depth_list = [0, 5, 10, 2, 2, 2]
+        encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
+        decoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
+        decoder_norm = ["bn2d", "bn2d", "bn2d", "trms2d", "trms2d", "trms2d"]
+        decoder_act = ["relu", "relu", "relu", "silu", "silu", "silu"]
 
     sample = getattr(ckpt_args, "sample", True) if ckpt_args else True
     codebook_l2_norm = getattr(ckpt_args, "codebook_l2_norm", True) if ckpt_args else True
@@ -216,6 +234,12 @@ def build_dcae_model_from_ckpt(ckpt_path, device):
         anneal_noise=anneal_noise,
         dropout_p=dropout_p,
     )
+    config.encoder_depth_list = encoder_depth_list
+    config.decoder_depth_list = decoder_depth_list
+    config.encoder_block_type = encoder_block_type
+    config.decoder_block_type = decoder_block_type
+    config.decoder_norm = decoder_norm
+    config.decoder_act = decoder_act
 
     model = VQModel(config)
 
