@@ -31,8 +31,8 @@ def build_dcae_decoder_from_ckpt(ckpt_path, device):
     model_name = getattr(ckpt_args, "vq_model", None) if ckpt_args else None
 
     if model_name == "DCAE-16":
-        encoder_ch_mult = [1, 1, 2, 2, 4]
-        decoder_ch_mult = [1, 1, 2, 2, 4]
+        encoder_widths = [128, 256, 512, 512, 1024]
+        decoder_widths = [128, 256, 512, 512, 1024]
         encoder_depth_list = [0, 4, 8, 2, 2]
         decoder_depth_list = [0, 5, 10, 2, 2]
         encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU"]
@@ -40,8 +40,8 @@ def build_dcae_decoder_from_ckpt(ckpt_path, device):
         decoder_norm = ["bn2d", "bn2d", "bn2d", "trms2d", "trms2d"]
         decoder_act = ["relu", "relu", "relu", "silu", "silu"]
     elif model_name == "DCAE-64":
-        encoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
-        decoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
+        encoder_widths = [128, 256, 512, 512, 1024, 1024, 2048]
+        decoder_widths = [128, 256, 512, 512, 1024, 1024, 2048]
         encoder_depth_list = [0, 4, 8, 2, 2, 2, 2]
         decoder_depth_list = [0, 5, 10, 2, 2, 2, 2]
         encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
@@ -49,8 +49,8 @@ def build_dcae_decoder_from_ckpt(ckpt_path, device):
         decoder_norm = ["bn2d", "bn2d", "bn2d", "trms2d", "trms2d", "trms2d", "trms2d"]
         decoder_act = ["relu", "relu", "relu", "silu", "silu", "silu", "silu"]
     else:
-        encoder_ch_mult = [1, 1, 2, 2, 4, 4]
-        decoder_ch_mult = [1, 1, 2, 2, 4, 4]
+        encoder_widths = [128, 256, 512, 512, 1024, 1024]
+        decoder_widths = [128, 256, 512, 512, 1024, 1024]
         encoder_depth_list = [0, 4, 8, 2, 2, 2]
         decoder_depth_list = [0, 5, 10, 2, 2, 2]
         encoder_block_type = ["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU"]
@@ -69,8 +69,8 @@ def build_dcae_decoder_from_ckpt(ckpt_path, device):
         codebook_embed_dim=codebook_embed_dim,
         codebook_l2_norm=codebook_l2_norm,
         z_channels=z_channels,
-        encoder_ch_mult=encoder_ch_mult,
-        decoder_ch_mult=decoder_ch_mult,
+        encoder_ch_mult=encoder_widths,
+        decoder_ch_mult=decoder_widths,
         sample=sample,
         learnable_proj=learnable_proj,
         anneal_noise=anneal_noise,
@@ -93,7 +93,7 @@ def build_dcae_decoder_from_ckpt(ckpt_path, device):
     model.to(device)
     model.eval()
 
-    downsample_factor = 2 ** (len(encoder_ch_mult) - 1)
+    downsample_factor = 2 ** (len(encoder_widths) - 1)
     return model, downsample_factor, num_bits
 
 
