@@ -105,8 +105,15 @@ def decode_binary_to_image(dcae_model, binary_codes, downsample_factor, num_bits
     h = z_q.reshape(B, num_bits, spatial_size, spatial_size)
     h = h * 2.0 - 1.0
 
+    shape = (B, dcae_model.quantize.embed_dim, spatial_size, spatial_size)
+    quant = dcae_model.quantize.get_codebook_entry(
+        h.permute(0, 2, 3, 1).reshape(-1, num_bits),
+        shape=shape,
+        channel_first=True,
+    )
+
     with torch.no_grad():
-        dec_input = dcae_model.post_quant_conv(h)
+        dec_input = dcae_model.post_quant_conv(quant)
         samples = dcae_model.decoder(dec_input)
 
     return samples

@@ -98,20 +98,20 @@ class ContinuousTransformer(Transformer):
             if i == 0:
                 x_prev = torch.zeros(bs, 1, self.codebook_dim, device=cond_combined.device)
             else:
-                x_prev = token.clone().detach().unsqueeze(1)
+                x_prev = raw_token.clone().detach().unsqueeze(1)
 
             input_pos = torch.tensor([self.cls_token_num + i], device=cond_combined.device)
             logits, _ = self(x_prev, None, input_pos=input_pos)
-            token = torch.sign(logits[:, -1, :])
+            raw_token = torch.sign(logits[:, -1, :])
 
             if cfg_scale != 1.0:
-                cond_token = token[:bs // 2]
-                uncond_token = token[bs // 2:]
-                token = uncond_token + cfg_scale * (cond_token - uncond_token)
-                token = torch.sign(token)
-                generated.append(token[:bs // 2])
+                cond_token = raw_token[:bs // 2]
+                uncond_token = raw_token[bs // 2:]
+                cfg_token = uncond_token + cfg_scale * (cond_token - uncond_token)
+                cfg_token = torch.sign(cfg_token)
+                generated.append(cfg_token)
             else:
-                generated.append(token)
+                generated.append(raw_token)
 
         return torch.stack(generated, dim=1)
 
