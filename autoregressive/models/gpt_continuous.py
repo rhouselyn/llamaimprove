@@ -7,15 +7,7 @@ import torch.nn.functional as F
 
 from autoregressive.models.gpt import (
     ModelArgs as BaseModelArgs,
-    LabelEmbedder,
-    CaptionEmbedder,
-    RMSNorm,
-    FeedForward,
-    KVCache,
-    Attention,
-    TransformerBlock,
-    precompute_freqs_cis_2d,
-    find_multiple,
+    Transformer,
 )
 
 
@@ -24,75 +16,14 @@ class ContinuousModelArgs(BaseModelArgs):
     codebook_dim: int = 128
 
 
-class ContinuousTransformer(nn.Module):
+class ContinuousTransformer(Transformer):
     def __init__(self, config: ContinuousModelArgs):
-        super().__init__()
-        self.config = config
-        self.n_layer = config.n_layer
-        self.block_size = config.block_size
-        self.num_classes = config.num_classes
-        self.model_type = config.model_type
-        self.cls_token_num = config.cls_token_num
+        super().__init__(config)
         self.codebook_dim = config.codebook_dim
-
-        if self.model_type == 'c2i':
-            self.cls_embedding = LabelEmbedder(config.num_classes, config.dim, config.class_dropout_prob)
-        elif self.model_type == 't2i':
-            self.cls_embedding = CaptionEmbedder(config.caption_dim, config.dim, config.class_dropout_prob)
-        else:
-            raise Exception("please check model type")
-
         self.tok_embeddings = nn.Linear(config.codebook_dim, config.dim, bias=False)
-        self.tok_dropout = nn.Dropout(config.token_dropout_p)
-
-        dpr = [x.item() for x in torch.linspace(0, config.drop_path_rate, config.n_layer)]
-        self.layers = torch.nn.ModuleList()
-        for layer_id in range(config.n_layer):
-            self.layers.append(TransformerBlock(config, dpr[layer_id]))
-
-        self.norm = RMSNorm(config.dim, eps=config.norm_eps)
         self.output = nn.Linear(config.dim, config.codebook_dim, bias=False)
-
-        grid_size = int(self.block_size ** 0.5)
-        assert grid_size * grid_size == self.block_size, \
-            f"block_size={self.block_size} must be a perfect square for 2D RoPE"
-        self.freqs_cis = precompute_freqs_cis_2d(
-            grid_size, config.dim // config.n_head, config.rope_base, self.cls_token_num
-        )
-
-        self.max_batch_size = -1
-        self.max_seq_length = -1
-
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        self.apply(self._init_weights)
+        nn.init.normal_(self.tok_embeddings.weight, mean=0.0, std=config.initializer_range)
         nn.init.constant_(self.output.weight, 0)
-
-    def _init_weights(self, module):
-        std = self.config.initializer_range
-        if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=std)
-
-    def setup_caches(self, max_batch_size, max_seq_length, dtype):
-        head_dim = self.config.dim // self.config.n_head
-        max_seq_length = find_multiple(max_seq_length, 8)
-        self.max_seq_length = max_seq_length
-        self.max_batch_size = max_batch_size
-        for b in self.layers:
-            b.attention.kv_cache = KVCache(max_batch_size, max_seq_length, self.config.n_head, head_dim, dtype)
-
-        causal_mask = torch.tril(torch.ones(self.max_seq_length, self.max_seq_length, dtype=torch.bool))
-        self.causal_mask = causal_mask.unsqueeze(0).repeat(self.max_batch_size, 1, 1)
-        grid_size = int(self.config.block_size ** 0.5)
-        assert grid_size * grid_size == self.block_size
-        self.freqs_cis = precompute_freqs_cis_2d(
-            grid_size, self.config.dim // self.config.n_head, self.config.rope_base, self.cls_token_num
-        )
 
     def forward(
         self,
@@ -146,7 +77,11 @@ class ContinuousTransformer(nn.Module):
 
     @torch.no_grad()
     def generate(self, cond_idx, max_new_tokens, temperature=1.0, top_k=None, cfg_scale=1.0):
-        self.setup_caches(max_batch_size=cond_idx.shape[0], max_seq_length=max_new_tokens + self.cls_token_num, dtype=next(self.parameters()).dtype)
+        self.setup_caches(
+            max_batch_size=cond_idx.shape[0] * 2 if cfg_scale > 1.0 else cond_idx.shape[0],
+            max_seq_length=max_new_tokens + self.cls_token_num,
+            dtype=next(self.parameters()).dtype,
+        )
 
         if cfg_scale != 1.0:
             cond_null = torch.ones_like(cond_idx) * self.num_classes
@@ -179,9 +114,6 @@ class ContinuousTransformer(nn.Module):
                 generated.append(token)
 
         return torch.stack(generated, dim=1)
-
-    def get_fsdp_wrap_module_list(self) -> List[nn.Module]:
-        return list(self.layers)
 
 
 def GPT_B_cont(**kwargs):
