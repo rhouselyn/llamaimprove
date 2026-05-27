@@ -18,7 +18,8 @@ sys.path.insert(0, project_root)
 from utils.distributed import init_distributed_mode
 from dataset.augmentation import center_crop_arr
 from dataset.build import build_dataset
-from tokenizer.tokenizer_image.bsqdc_evit_model import VQ_models
+from tokenizer.tokenizer_image.bsqdc_evit_model import VQ_models as VQ_models_evit
+from tokenizer.tokenizer_image.bsqdc_model import VQModel as VQModel_legacy, ModelArgs
 
 
 IMAGENET_SYNSETS = [
@@ -169,23 +170,58 @@ def parse_imagenet_label_from_path(filelist_path):
 def build_dcae_model_from_ckpt(ckpt_path, device):
     checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
+    state_dict = checkpoint.get("ema", checkpoint["model"])
+
+    is_evit = any(k.startswith("encoder.project_in") or k.startswith("encoder.stages") for k in state_dict.keys())
+
     ckpt_args = checkpoint.get("args", None)
-    if ckpt_args is None:
-        raise ValueError("Checkpoint does not contain 'args' - cannot reconstruct model architecture")
 
-    model_name = getattr(ckpt_args, "vq_model", "DCAE-32")
+    if is_evit:
+        if ckpt_args is None:
+            raise ValueError("EViT checkpoint does not contain 'args' - cannot reconstruct model architecture")
+        model_name = getattr(ckpt_args, "vq_model", "DCAE-32")
+        model = VQ_models_evit[model_name](
+            codebook_l2_norm=getattr(ckpt_args, "codebook_l2_norm", True),
+            dropout_p=getattr(ckpt_args, "dropout_p", 0.0),
+            sample=getattr(ckpt_args, "sample", True),
+            anneal_noise=getattr(ckpt_args, "anneal_noise", False),
+            anneal_start_epoch=getattr(ckpt_args, "anneal_start_epoch", 10),
+            anneal_end_epoch=getattr(ckpt_args, "anneal_end_epoch", 30),
+            noise_start_scale=getattr(ckpt_args, "noise_start_scale", 1.0),
+            noise_end_scale=getattr(ckpt_args, "noise_end_scale", 0.1),
+            learnable_proj=getattr(ckpt_args, "learnable_proj", True),
+        )
+        print(f"Detected EViT architecture, building with VQ_models_evit[{model_name}]")
+    else:
+        num_bits = state_dict["quant_conv.weight"].shape[0]
+        z_channels = state_dict["quant_conv.weight"].shape[1]
+        codebook_embed_dim = state_dict["post_quant_conv.weight"].shape[1]
 
-    model = VQ_models[model_name](
-        codebook_l2_norm=getattr(ckpt_args, "codebook_l2_norm", True),
-        dropout_p=getattr(ckpt_args, "dropout_p", 0.0),
-        sample=getattr(ckpt_args, "sample", True),
-        anneal_noise=getattr(ckpt_args, "anneal_noise", False),
-        anneal_start_epoch=getattr(ckpt_args, "anneal_start_epoch", 10),
-        anneal_end_epoch=getattr(ckpt_args, "anneal_end_epoch", 30),
-        noise_start_scale=getattr(ckpt_args, "noise_start_scale", 1.0),
-        noise_end_scale=getattr(ckpt_args, "noise_end_scale", 0.1),
-        learnable_proj=getattr(ckpt_args, "learnable_proj", True),
-    )
+        model_name = getattr(ckpt_args, "vq_model", None) if ckpt_args else None
+        if model_name == "DCAE-16":
+            encoder_ch_mult = [1, 1, 2, 2, 4]
+            decoder_ch_mult = [1, 1, 2, 2, 4]
+        elif model_name == "DCAE-64":
+            encoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
+            decoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
+        else:
+            encoder_ch_mult = [1, 1, 2, 2, 4, 4]
+            decoder_ch_mult = [1, 1, 2, 2, 4, 4]
+
+        config = ModelArgs(
+            num_bits=num_bits,
+            codebook_embed_dim=codebook_embed_dim,
+            codebook_l2_norm=getattr(ckpt_args, "codebook_l2_norm", True) if ckpt_args else True,
+            z_channels=z_channels,
+            encoder_ch_mult=encoder_ch_mult,
+            decoder_ch_mult=decoder_ch_mult,
+            sample=getattr(ckpt_args, "sample", True) if ckpt_args else True,
+            learnable_proj=getattr(ckpt_args, "learnable_proj", True) if ckpt_args else True,
+            anneal_noise=getattr(ckpt_args, "anneal_noise", False) if ckpt_args else False,
+            dropout_p=getattr(ckpt_args, "dropout_p", 0.0) if ckpt_args else 0.0,
+        )
+        model = VQModel_legacy(config)
+        print(f"Detected legacy VQ-VAE architecture, building with VQModel_legacy")
 
     use_ema = "ema" in checkpoint
     if use_ema:
