@@ -18,8 +18,7 @@ sys.path.insert(0, project_root)
 from utils.distributed import init_distributed_mode
 from dataset.augmentation import center_crop_arr
 from dataset.build import build_dataset
-from tokenizer.tokenizer_image.bsqdc_evit_model import VQModel
-from tokenizer.tokenizer_image.bsqdc_model import ModelArgs
+from tokenizer.tokenizer_image.bsqdc_evit_model import VQ_models
 
 
 IMAGENET_SYNSETS = [
@@ -169,8 +168,38 @@ def parse_imagenet_label_from_path(filelist_path):
 
 def build_dcae_model_from_ckpt(ckpt_path, device):
     checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    state_dict = checkpoint["model"]
 
+    ckpt_args = checkpoint.get("args", None)
+    if ckpt_args is None:
+        raise ValueError("Checkpoint does not contain 'args' - cannot reconstruct model architecture")
+
+    model_name = getattr(ckpt_args, "vq_model", "DCAE-32")
+
+    model = VQ_models[model_name](
+        codebook_l2_norm=getattr(ckpt_args, "codebook_l2_norm", True),
+        dropout_p=getattr(ckpt_args, "dropout_p", 0.0),
+        sample=getattr(ckpt_args, "sample", True),
+        anneal_noise=getattr(ckpt_args, "anneal_noise", False),
+        anneal_start_epoch=getattr(ckpt_args, "anneal_start_epoch", 10),
+        anneal_end_epoch=getattr(ckpt_args, "anneal_end_epoch", 30),
+        noise_start_scale=getattr(ckpt_args, "noise_start_scale", 1.0),
+        noise_end_scale=getattr(ckpt_args, "noise_end_scale", 0.1),
+        learnable_proj=getattr(ckpt_args, "learnable_proj", True),
+    )
+
+    use_ema = "ema" in checkpoint
+    if use_ema:
+        print(f"Loading EMA weights from checkpoint")
+        model.load_state_dict(checkpoint["ema"])
+    else:
+        model.load_state_dict(checkpoint["model"])
+
+    model.to(device)
+    model.eval()
+
+    config = model.config
+
+    state_dict = checkpoint["model"]
     num_bits = state_dict["quant_conv.weight"].shape[0]
     z_channels = state_dict["quant_conv.weight"].shape[1]
     codebook_embed_dim = state_dict["post_quant_conv.weight"].shape[1]
@@ -185,50 +214,7 @@ def build_dcae_model_from_ckpt(ckpt_path, device):
         group_bits = num_bits // num_groups
         group_embed_dim = codebook_embed_dim // num_groups
 
-    ckpt_args = checkpoint.get("args", None)
-    model_name = getattr(ckpt_args, "vq_model", None) if ckpt_args else None
-
-    if model_name == "DCAE-16":
-        encoder_ch_mult = [1, 1, 2, 2, 4]
-        decoder_ch_mult = [1, 1, 2, 2, 4]
-    elif model_name == "DCAE-64":
-        encoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
-        decoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
-    else:
-        encoder_ch_mult = [1, 1, 2, 2, 4, 4]
-        decoder_ch_mult = [1, 1, 2, 2, 4, 4]
-
-    sample = getattr(ckpt_args, "sample", True) if ckpt_args else True
-    codebook_l2_norm = getattr(ckpt_args, "codebook_l2_norm", True) if ckpt_args else True
-    learnable_proj = getattr(ckpt_args, "learnable_proj", True) if ckpt_args else True
-    anneal_noise = getattr(ckpt_args, "anneal_noise", False) if ckpt_args else False
-    dropout_p = getattr(ckpt_args, "dropout_p", 0.0) if ckpt_args else 0.0
-
-    config = ModelArgs(
-        num_bits=num_bits,
-        codebook_embed_dim=codebook_embed_dim,
-        codebook_l2_norm=codebook_l2_norm,
-        z_channels=z_channels,
-        encoder_ch_mult=encoder_ch_mult,
-        decoder_ch_mult=decoder_ch_mult,
-        sample=sample,
-        learnable_proj=learnable_proj,
-        anneal_noise=anneal_noise,
-        dropout_p=dropout_p,
-    )
-
-    model = VQModel(config)
-
-    use_ema = "ema" in checkpoint
-    if use_ema:
-        print(f"Loading EMA weights from checkpoint")
-        model.load_state_dict(checkpoint["ema"])
-    else:
-        model.load_state_dict(state_dict)
-
-    model.to(device)
-    model.eval()
-
+    encoder_ch_mult = config.encoder_ch_mult
     downsample_factor = 2 ** (len(encoder_ch_mult) - 1)
 
     info = {
@@ -240,7 +226,7 @@ def build_dcae_model_from_ckpt(ckpt_path, device):
         "group_embed_dim": group_embed_dim,
         "downsample_factor": downsample_factor,
         "encoder_ch_mult": encoder_ch_mult,
-        "decoder_ch_mult": decoder_ch_mult,
+        "decoder_ch_mult": config.decoder_ch_mult,
         "use_ema": use_ema,
     }
 
