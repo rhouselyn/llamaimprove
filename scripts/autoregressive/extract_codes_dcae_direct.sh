@@ -1,7 +1,7 @@
 #!/bin/bash
 set -x
 
-VQ_CKPT="/mnt/afs/zhengmingkai/whl/llamagen/tokenizer/tokenizer_image/results_dcae_training/033-DCAE-32-128b-256px/checkpoints/epoch_0040.pt"
+VQ_CKPT="/mnt/afs/zhengmingkai/whl/llamagen/tokenizer/tokenizer_image/results_dcae_training/034-DCAE-32-128b-256px/checkpoints/epoch_0040.pt"
 DATA_PATH="/mnt/afs/zhengmingkai/whl/llamagen/imagenet_train_filelist.txt"
 CODE_PATH="./dcae_codes"
 IMAGE_SIZE=256
