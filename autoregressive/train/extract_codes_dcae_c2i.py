@@ -167,68 +167,82 @@ def parse_imagenet_label_from_path(filelist_path):
     return labels
 
 
+def _try_build_evit(ckpt_args):
+    model_name = getattr(ckpt_args, "vq_model", "DCAE-32")
+    model = VQ_models_evit[model_name](
+        codebook_l2_norm=getattr(ckpt_args, "codebook_l2_norm", True),
+        dropout_p=getattr(ckpt_args, "dropout_p", 0.0),
+        sample=getattr(ckpt_args, "sample", True),
+        anneal_noise=getattr(ckpt_args, "anneal_noise", False),
+        anneal_start_epoch=getattr(ckpt_args, "anneal_start_epoch", 10),
+        anneal_end_epoch=getattr(ckpt_args, "anneal_end_epoch", 30),
+        noise_start_scale=getattr(ckpt_args, "noise_start_scale", 1.0),
+        noise_end_scale=getattr(ckpt_args, "noise_end_scale", 0.1),
+        learnable_proj=getattr(ckpt_args, "learnable_proj", True),
+    )
+    return model
+
+
+def _try_build_legacy(state_dict, ckpt_args):
+    num_bits = state_dict["quant_conv.weight"].shape[0]
+    z_channels = state_dict["quant_conv.weight"].shape[1]
+    codebook_embed_dim = state_dict["post_quant_conv.weight"].shape[1]
+
+    model_name = getattr(ckpt_args, "vq_model", None) if ckpt_args else None
+    if model_name == "DCAE-16":
+        encoder_ch_mult = [1, 1, 2, 2, 4]
+        decoder_ch_mult = [1, 1, 2, 2, 4]
+    elif model_name == "DCAE-64":
+        encoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
+        decoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
+    else:
+        encoder_ch_mult = [1, 1, 2, 2, 4, 4]
+        decoder_ch_mult = [1, 1, 2, 2, 4, 4]
+
+    config = ModelArgs(
+        num_bits=num_bits,
+        codebook_embed_dim=codebook_embed_dim,
+        codebook_l2_norm=getattr(ckpt_args, "codebook_l2_norm", True) if ckpt_args else True,
+        z_channels=z_channels,
+        encoder_ch_mult=encoder_ch_mult,
+        decoder_ch_mult=decoder_ch_mult,
+        sample=getattr(ckpt_args, "sample", True) if ckpt_args else True,
+        learnable_proj=getattr(ckpt_args, "learnable_proj", True) if ckpt_args else True,
+        anneal_noise=getattr(ckpt_args, "anneal_noise", False) if ckpt_args else False,
+        dropout_p=getattr(ckpt_args, "dropout_p", 0.0) if ckpt_args else 0.0,
+    )
+    model = VQModel_legacy(config)
+    return model
+
+
 def build_dcae_model_from_ckpt(ckpt_path, device):
     checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
-    state_dict = checkpoint.get("ema", checkpoint["model"])
-
-    is_evit = any(k.startswith("encoder.project_in") or k.startswith("encoder.stages") for k in state_dict.keys())
-
     ckpt_args = checkpoint.get("args", None)
-
-    if is_evit:
-        if ckpt_args is None:
-            raise ValueError("EViT checkpoint does not contain 'args' - cannot reconstruct model architecture")
-        model_name = getattr(ckpt_args, "vq_model", "DCAE-32")
-        model = VQ_models_evit[model_name](
-            codebook_l2_norm=getattr(ckpt_args, "codebook_l2_norm", True),
-            dropout_p=getattr(ckpt_args, "dropout_p", 0.0),
-            sample=getattr(ckpt_args, "sample", True),
-            anneal_noise=getattr(ckpt_args, "anneal_noise", False),
-            anneal_start_epoch=getattr(ckpt_args, "anneal_start_epoch", 10),
-            anneal_end_epoch=getattr(ckpt_args, "anneal_end_epoch", 30),
-            noise_start_scale=getattr(ckpt_args, "noise_start_scale", 1.0),
-            noise_end_scale=getattr(ckpt_args, "noise_end_scale", 0.1),
-            learnable_proj=getattr(ckpt_args, "learnable_proj", True),
-        )
-        print(f"Detected EViT architecture, building with VQ_models_evit[{model_name}]")
-    else:
-        num_bits = state_dict["quant_conv.weight"].shape[0]
-        z_channels = state_dict["quant_conv.weight"].shape[1]
-        codebook_embed_dim = state_dict["post_quant_conv.weight"].shape[1]
-
-        model_name = getattr(ckpt_args, "vq_model", None) if ckpt_args else None
-        if model_name == "DCAE-16":
-            encoder_ch_mult = [1, 1, 2, 2, 4]
-            decoder_ch_mult = [1, 1, 2, 2, 4]
-        elif model_name == "DCAE-64":
-            encoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
-            decoder_ch_mult = [1, 1, 2, 2, 4, 4, 8]
-        else:
-            encoder_ch_mult = [1, 1, 2, 2, 4, 4]
-            decoder_ch_mult = [1, 1, 2, 2, 4, 4]
-
-        config = ModelArgs(
-            num_bits=num_bits,
-            codebook_embed_dim=codebook_embed_dim,
-            codebook_l2_norm=getattr(ckpt_args, "codebook_l2_norm", True) if ckpt_args else True,
-            z_channels=z_channels,
-            encoder_ch_mult=encoder_ch_mult,
-            decoder_ch_mult=decoder_ch_mult,
-            sample=getattr(ckpt_args, "sample", True) if ckpt_args else True,
-            learnable_proj=getattr(ckpt_args, "learnable_proj", True) if ckpt_args else True,
-            anneal_noise=getattr(ckpt_args, "anneal_noise", False) if ckpt_args else False,
-            dropout_p=getattr(ckpt_args, "dropout_p", 0.0) if ckpt_args else 0.0,
-        )
-        model = VQModel_legacy(config)
-        print(f"Detected legacy VQ-VAE architecture, building with VQModel_legacy")
-
     use_ema = "ema" in checkpoint
-    if use_ema:
-        print(f"Loading EMA weights from checkpoint")
-        model.load_state_dict(checkpoint["ema"])
-    else:
-        model.load_state_dict(checkpoint["model"])
+    load_sd = checkpoint["ema"] if use_ema else checkpoint["model"]
+
+    model = None
+
+    if ckpt_args is not None:
+        try:
+            model = _try_build_evit(ckpt_args)
+            model.load_state_dict(load_sd, strict=True)
+            print(f"Successfully loaded with EViT architecture")
+        except (RuntimeError, KeyError, ValueError) as e:
+            print(f"EViT architecture mismatch ({e}), trying legacy...")
+            model = None
+
+    if model is None:
+        try:
+            model = _try_build_legacy(load_sd, ckpt_args)
+            model.load_state_dict(load_sd, strict=True)
+            print(f"Successfully loaded with legacy VQ-VAE architecture")
+        except (RuntimeError, KeyError, ValueError) as e:
+            raise RuntimeError(
+                f"Failed to load checkpoint with both EViT and legacy architectures. "
+                f"Last error: {e}"
+            ) from e
 
     model.to(device)
     model.eval()
